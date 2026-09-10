@@ -52,8 +52,18 @@ def get_schema_description(db_path: str = DB_PATH) -> str:
     for table in tables:
         cur.execute(f"PRAGMA table_info({table})")
         columns = cur.fetchall()
-        col_desc = ", ".join(f"{col[1]} ({col[2]})" for col in columns)
-        lines.append(f"- {table}: {col_desc}")
+
+        # Grab one sample row so Gemini can see actual data formats
+        # (e.g. that 'month' is stored as 'YYYY-MM', not 'Q4' or 'October').
+        cur.execute(f"SELECT * FROM {table} LIMIT 1")
+        sample_row = cur.fetchone()
+
+        col_descs = []
+        for i, col in enumerate(columns):
+            sample_val = sample_row[i] if sample_row else "N/A"
+            col_descs.append(f"{col[1]} ({col[2]}, e.g. {sample_val!r})")
+
+        lines.append(f"- {table}: {', '.join(col_descs)}")
 
     conn.close()
     return "\n".join(lines)
