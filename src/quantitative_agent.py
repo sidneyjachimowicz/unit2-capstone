@@ -16,6 +16,7 @@ from google import genai
 
 from src.sql_validator import validate_sql
 from src.tokenomics import log_usage
+from src.gemini_utils import generate_with_retry
 
 load_dotenv()
 
@@ -103,10 +104,7 @@ Question: {question}
     if feedback:
         prompt += f"\n\nYour previous query was rejected for this reason: {feedback}\nPlease generate a corrected SELECT query."
 
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-    )
+    response = generate_with_retry(client, MODEL_NAME, prompt)
 
     usage = response.usage_metadata
     log_usage(

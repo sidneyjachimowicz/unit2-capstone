@@ -18,6 +18,7 @@ from sentence_transformers import SentenceTransformer
 from google import genai
 
 from src.tokenomics import log_usage
+from src.gemini_utils import generate_with_retry
 
 load_dotenv()
 
@@ -198,10 +199,7 @@ Answer clearly and cite which document/section you drew from.
 """
 
     client = _get_gemini_client()
-    response = client.models.generate_content(
-        model=GEMINI_MODEL_NAME,
-        contents=prompt,
-    )
+    response = generate_with_retry(client, GEMINI_MODEL_NAME, prompt)
 
     usage = response.usage_metadata
     log_usage(
