@@ -123,6 +123,26 @@ nothing else.
     return qual_result, quant_result, quant_subquestion
 
 
+def _results_are_empty_or_null(quant_result: dict) -> bool:
+    """
+    Deterministically detect a query that 'succeeded' but returned no
+    usable data (e.g. all-None aggregate values from a WHERE clause that
+    matched zero rows). Don't rely on Gemini to notice this reliably on
+    its own -- a real run showed it can report 'complete: true' even when
+    every returned value was None.
+    """
+    if not quant_result.get("success"):
+        return True
+    results = quant_result.get("results")
+    if not results:
+        return True
+    # Check if every value in every row is None/null
+    for row in results:
+        if any(v is not None for v in row.values()):
+            return False
+    return True
+
+
 def _synthesize_and_check(question: str, qual_result: dict, quant_result: dict) -> dict:
     """
     Combined synthesis + completeness self-check in ONE Gemini call
@@ -148,18 +168,33 @@ Do two things:
 1. Write one clear, complete answer to the original question that combines
    both pieces of information. Be specific and cite the numbers found.
 2. Self-assess: does your answer fully and directly address every part of
-   the original question, with no missing pieces?
+   the original question, with no missing pieces? If the database findings
+   show None/null values or empty results, this means the query likely
+   matched zero rows (e.g. a category value that doesn't exist in the
+   data) -- treat this as INCOMPLETE, not as a valid "no data" answer.
 
 Respond with ONLY a JSON object, no markdown fences, in this exact format:
 {{"answer": "your full answer here", "complete": true or false, "gap": "if incomplete, one sentence on what's missing, else empty string"}}
 """
     raw = _call_gemini(prompt)
     try:
-        return _extract_json(raw)
+        result = _extract_json(raw)
     except (json.JSONDecodeError, AttributeError):
         # fail open: treat the raw text as the answer and assume complete
         # rather than looping or crashing on a parse hiccup
-        return {"answer": raw, "complete": True, "gap": ""}
+        result = {"answer": raw, "complete": True, "gap": ""}
+
+    # Deterministic override: don't trust Gemini's self-report alone for
+    # the all-null-results case, since it can miss this (see README).
+    if _results_are_empty_or_null(quant_result) and result.get("complete"):
+        result["complete"] = False
+        result["gap"] = (
+            "The database query returned no matching rows (all-null results). "
+            "The category value used in the query likely doesn't match the "
+            "actual data -- retry with the exact valid values from the schema."
+        )
+
+    return result
 
 
 def handle_question(question: str) -> dict:

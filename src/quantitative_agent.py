@@ -61,8 +61,25 @@ def get_schema_description(db_path: str = DB_PATH) -> str:
 
         col_descs = []
         for i, col in enumerate(columns):
+            col_name, col_type = col[1], col[2]
             sample_val = sample_row[i] if sample_row else "N/A"
-            col_descs.append(f"{col[1]} ({col[2]}, e.g. {sample_val!r})")
+
+            # For TEXT columns, check if this looks like a category/enum
+            # column (few distinct values) and show ALL valid values, not
+            # just one sample. A single sample value isn't enough for
+            # Gemini to know the exact stored spelling when a question's
+            # wording doesn't match it (e.g. "pull request" in a policy
+            # doc vs. the actual stored value "code_review").
+            if col_type.upper() == "TEXT":
+                cur.execute(f"SELECT DISTINCT {col_name} FROM {table} LIMIT 11")
+                distinct_vals = [row[0] for row in cur.fetchall()]
+                if 1 < len(distinct_vals) <= 10:
+                    col_descs.append(
+                        f"{col_name} ({col_type}, valid values: {distinct_vals!r})"
+                    )
+                    continue
+
+            col_descs.append(f"{col_name} ({col_type}, e.g. {sample_val!r})")
 
         lines.append(f"- {table}: {', '.join(col_descs)}")
 

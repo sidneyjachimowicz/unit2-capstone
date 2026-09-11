@@ -41,6 +41,22 @@ def test_schema_description_includes_sample_values():
     assert "expenses" in schema
 
 
+def test_schema_description_shows_all_category_values_for_low_cardinality_columns():
+    """
+    Regression test for the 'pull_request' bug: the ticket 'type' column
+    has only 4 distinct values, but a policy doc discussing "pull requests"
+    could mislead Gemini into guessing that literal string as the stored
+    value. The schema must show ALL valid values for such columns so
+    Gemini can match the question's wording to the actual stored value.
+    """
+    schema = get_schema_description()
+    assert "code_review" in schema
+    assert "bug_fix" in schema
+    # The exact wrong value that caused the real bug should never need
+    # to be guessed, since the real valid values are spelled out.
+    assert "pull_request" not in schema
+
+
 def test_extract_sql_from_markdown_fence():
     text = "```sql\nSELECT * FROM customers\n```"
     assert _extract_sql(text) == "SELECT * FROM customers"

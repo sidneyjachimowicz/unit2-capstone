@@ -52,6 +52,54 @@ def test_classify_fails_open_to_complex_on_parse_error(mock_call):
     assert result["classification"] == "complex"
 
 
+# --- Deterministic null-results override (the real 'pull_request' bug) -
+
+@patch("src.manager_agent._call_gemini")
+def test_synthesize_overrides_false_complete_claim_on_null_results(mock_call):
+    """
+    Regression test for a real bug: Gemini self-reported 'complete: true'
+    even when the SQL query returned all-None values (a WHERE clause that
+    matched zero rows, e.g. a category value not present in the data).
+    The Manager must catch this deterministically rather than trust the
+    LLM's self-report alone.
+    """
+    from src.manager_agent import _synthesize_and_check
+
+    mock_call.return_value = '{"answer": "No data available.", "complete": true, "gap": ""}'
+
+    quant_result_all_null = {
+        "success": True,
+        "sql": "SELECT AVG(turnaround_hours) FROM tickets WHERE type='pull_request'",
+        "results": [{"avg": None, "pct": None}],
+    }
+    qual_result = {"answer": "Standard is 48 hours", "sources": []}
+
+    result = _synthesize_and_check("some question", qual_result, quant_result_all_null)
+
+    assert result["complete"] is False
+    assert "no matching rows" in result["gap"].lower() or "null" in result["gap"].lower()
+
+
+@patch("src.manager_agent._call_gemini")
+def test_synthesize_respects_true_complete_claim_on_real_results(mock_call):
+    """When results are genuinely populated, the override must not fire
+    -- only all-null results should force complete=False."""
+    from src.manager_agent import _synthesize_and_check
+
+    mock_call.return_value = '{"answer": "40 expenses exceeded $500.", "complete": true, "gap": ""}'
+
+    quant_result_good = {
+        "success": True,
+        "sql": "SELECT COUNT(*) FROM expenses WHERE amount > 500",
+        "results": [{"count": 40}],
+    }
+    qual_result = {"answer": "Threshold is $500", "sources": []}
+
+    result = _synthesize_and_check("some question", qual_result, quant_result_good)
+
+    assert result["complete"] is True
+
+
 # --- Full routing via handle_question (all dependencies mocked) -------
 
 @patch("src.manager_agent.classify_question")
