@@ -123,7 +123,12 @@ nothing else.
     return qual_result, quant_result, quant_subquestion
 
 
-def _synthesize(question: str, qual_result: dict, quant_result: dict) -> str:
+def _synthesize_and_check(question: str, qual_result: dict, quant_result: dict) -> dict:
+    """
+    Combined synthesis + completeness self-check in ONE Gemini call
+    (instead of two) to conserve API quota. Returns
+    {"answer": str, "complete": bool, "gap": str}.
+    """
     qual_part = qual_result.get("answer") or "No policy information available."
     quant_part = (
         f"SQL query used: {quant_result.get('sql')}\nResults: {quant_result.get('results')}"
@@ -139,30 +144,22 @@ Policy information:
 Database findings:
 {quant_part}
 
-Write one clear, complete answer to the original question that combines
-both pieces of information. Be specific and cite the numbers found.
-"""
-    return _call_gemini(prompt)
+Do two things:
+1. Write one clear, complete answer to the original question that combines
+   both pieces of information. Be specific and cite the numbers found.
+2. Self-assess: does your answer fully and directly address every part of
+   the original question, with no missing pieces?
 
-
-def _check_completeness(question: str, answer: str) -> dict:
-    """
-    Ask Gemini to self-assess whether the synthesized answer actually
-    addresses the original question. Returns {"complete": bool, "gap": str}.
-    """
-    prompt = f"""Original question: {question}
-
-Proposed answer: {answer}
-
-Does this answer fully and directly address the original question, with
-no missing pieces? Respond with ONLY a JSON object, no markdown fences:
-{{"complete": true or false, "gap": "if incomplete, one sentence on what's missing, else empty string"}}
+Respond with ONLY a JSON object, no markdown fences, in this exact format:
+{{"answer": "your full answer here", "complete": true or false, "gap": "if incomplete, one sentence on what's missing, else empty string"}}
 """
     raw = _call_gemini(prompt)
     try:
         return _extract_json(raw)
     except (json.JSONDecodeError, AttributeError):
-        return {"complete": True, "gap": ""}  # fail open, don't loop forever on parse errors
+        # fail open: treat the raw text as the answer and assume complete
+        # rather than looping or crashing on a parse hiccup
+        return {"answer": raw, "complete": True, "gap": ""}
 
 
 def handle_question(question: str) -> dict:
@@ -194,24 +191,20 @@ def handle_question(question: str) -> dict:
 
     # complex
     qual_result, quant_result, quant_subquestion = _decompose_complex_question(question)
-    answer = _synthesize(question, qual_result, quant_result)
-
-    completeness = _check_completeness(question, answer)
+    synthesis = _synthesize_and_check(question, qual_result, quant_result)
+    answer = synthesis["answer"]
     followup_used = False
 
-    if not completeness.get("complete", True):
+    if not synthesis.get("complete", True):
         followup_used = True
-        clarifying_prompt = f"""{question}
-
-Additional context needed: {completeness.get('gap')}
-Previous partial answer: {answer}
-"""
         # One clarifying follow-up: re-run the quantitative sub-question
-        # with the gap as extra context, then re-synthesize.
+        # with the gap as extra context, then re-synthesize (still just
+        # one more combined call, not two).
         quant_result_2 = answer_quantitative_question(
-            f"{quant_subquestion}\n(Additional context: {completeness.get('gap')})"
+            f"{quant_subquestion}\n(Additional context: {synthesis.get('gap')})"
         )
-        answer = _synthesize(question, qual_result, quant_result_2)
+        synthesis = _synthesize_and_check(question, qual_result, quant_result_2)
+        answer = synthesis["answer"]
         quant_result = quant_result_2
 
     return {

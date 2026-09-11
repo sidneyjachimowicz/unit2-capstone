@@ -69,6 +69,14 @@ def _chunk_markdown_by_section(text: str, doc_name: str) -> list[dict]:
     # Split on lines starting with "## " (level-2 headers)
     parts = re.split(r"(?m)^##\s+", text)
 
+    if len(parts) == 1:
+        # No "## " headers found at all -- fall back to treating the whole
+        # document as one chunk rather than silently indexing nothing.
+        whole_doc = parts[0].strip()
+        if whole_doc:
+            return [{"text": whole_doc, "doc_name": doc_name, "section": "Full Document"}]
+        return []
+
     chunks = []
     # Text before the first "## " is just the "# Title" line — too short and
     # generic to be a useful standalone retrieval unit (short chunks tend to
