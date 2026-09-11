@@ -1,7 +1,7 @@
-# unit2-capstone
+# Unit2-capstone
 # Enterprise RAG System — Multi-Agent CLI
 
-A Python CLI-based Retrieval-Augmented Generation (RAG) system that uses specialized AI agents to answer both qualitative and quantitative questions about enterprise documentation. Runs entirely locally (Chroma + SQLite) with Google Gemini as the LLM — no cloud infrastructure required.
+A Python CLI-based Retrieval-Augmented Generation (RAG) system that uses specialized AI agents to answer both qualitative and quantitative questions about enterprise documentation. Runs entirely locally (Chroma + SQLite) with Google Gemini as the LLM.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ A Python CLI-based Retrieval-Augmented Generation (RAG) system that uses special
 ```
 
 ### Manager Agent (`src/manager_agent.py`)
-- Classifies each question as `qualitative`, `quantitative`, or `complex` by asking Gemini to **reason about what information is actually needed** — not by keyword matching. This is deliberately tested against a red-herring query (see "Known limitations & lessons learned" below).
+- Classifies each question as `qualitative`, `quantitative`, or `complex` by asking Gemini to **reason about what information is actually needed** not relying on keyword matching. This is deliberately tested against a red-herring query (see "Known limitations & lessons learned" below).
 - For `complex` questions: retrieves the relevant policy fact first, uses it to build a precise quantitative sub-question (since both harder queries in this project depend on a policy-defined threshold before the numeric query makes sense), then synthesizes both results into one answer.
 - Performs a completeness self-check on every complex answer and issues **one clarifying follow-up** if the first pass doesn't fully address the original question.
 
@@ -43,7 +43,7 @@ A Python CLI-based Retrieval-Augmented Generation (RAG) system that uses special
 - Retrieves the top-3 most relevant chunks for a query, sends them to Gemini as grounding context, and returns an answer **with source attribution** (document name + section).
 
 ### Quantitative Agent (`src/quantitative_agent.py`)
-- Introspects the live SQLite schema (table/column names **plus one real sample value per column**) and gives that to Gemini so it can generate accurate SQL — including inferring date/text formats it couldn't otherwise guess.
+- Introspects the live SQLite schema (table/column names **plus one real sample value per column**) and gives that to Gemini so it can generate accurate SQL, includes inferring date/text formats it couldn't otherwise guess.
 - Every generated query is passed through `sql_validator.py` before touching the database. If rejected, the agent sends the rejection reason back to Gemini and retries once before giving up.
 - Logs every Gemini call's token usage via `tokenomics.py`.
 
@@ -126,13 +126,13 @@ print(result["answer"])
 
 Documenting real bugs found and fixed during development, since they're informative about how NL-to-SQL and RAG systems fail in practice:
 
-1. **Date-format guessing in NL-to-SQL:** The Quantitative Agent initially failed on "Compare Q4 performance across regions" — Gemini guessed the `month` column contained values like `'Q4'` or `'October'` and returned zero rows, even though the query was valid SQL (`success: True` but empty results). **Fix:** including one real sample value per column in the schema description (e.g. `month (TEXT, e.g. '2026-09')`) let Gemini correctly infer the `YYYY-MM` format and use `substr()` to extract months. Lesson: `success: True` does not mean "correct answer" — a validator can catch security issues but not semantic ones.
+1. **Date-format guessing in NL-to-SQL:** The Quantitative Agent initially failed on "Compare Q4 performance across regions." Gemini guessed the `month` column contained values like `'Q4'` or `'October'` and returned zero rows, even though the query was valid SQL (`success: True` but empty results). **Fix:** including one real sample value per column in the schema description (e.g. `month (TEXT, e.g. '2026-09')`) let Gemini correctly infer the `YYYY-MM` format and use `substr()` to extract months. Lesson: `success: True` does not mean "correct answer," a validator can catch security issues but not semantic ones.
 
 2. **Generic short chunks polluting retrieval:** The Qualitative Agent initially chunked each doc's `# Title` line into its own retrievable unit. These short, generic chunks (e.g. `"# Company Security Policy"`) embedded near a generic centroid and were retrieved for unrelated questions, meaning Gemini sometimes answered correctly from general knowledge while citing the wrong source — a genuinely broken grounding, even though the answer text looked fine. **Fix:** folded the title into the first real section instead of indexing it standalone.
 
 3. **Gemini API free-tier daily quota:** `gemini-3.6-flash` free tier caps at ~20 requests/day per project on the account used for this build (confirmed via a live `429 RESOURCE_EXHAUSTED` error, not estimated). A single complex Manager query can use 5+ Gemini calls, so the Manager's synthesis and completeness-check steps were merged into one combined call to reduce quota pressure without losing functionality.
 
-4. **SQL validator stacked-query gap** (see SQL Validator section above) — not fixed, documented as a known edge case outside this project's scope.
+4. **SQL validator stacked-query gap** (see SQL Validator section above): not fixed, documented as a known edge case outside this project's scope.
 
 5. **`google-generativeai` deprecation:** The originally-obvious package choice is deprecated by Google in favor of `google-genai`. This project uses the current SDK throughout.
 
