@@ -8,7 +8,7 @@ end the session and see a tokenomics summary for everything asked.
 """
 
 import sys
-from src.manager_agent import handle_question
+from src.manager_agent_graph import handle_question
 from src.tokenomics import print_summary
 
 BANNER = """
