@@ -20,6 +20,7 @@ from src.quantitative_agent import (
     _extract_sql,
     _execute_query,
     answer_quantitative_question,
+    is_unusual_query,
 )
 
 
@@ -78,9 +79,9 @@ def test_execute_query_against_real_db():
 @patch("src.quantitative_agent._ask_gemini_for_sql")
 def test_answer_pipeline_valid_query_first_try(mock_ask):
     """If Gemini's first query is already valid, no retry should occur."""
-    mock_ask.return_value = ("SELECT COUNT(*) FROM customers", {})
+    mock_ask.return_value = ("SELECT COUNT(*) FROM customers WHERE status='active'", {})
 
-    result = answer_quantitative_question("How many customers do we have?")
+    result = answer_quantitative_question("How many active customers do we have?")
 
     assert result["success"] is True
     assert mock_ask.call_count == 1  # no retry needed
@@ -92,10 +93,10 @@ def test_answer_pipeline_retries_once_on_rejection(mock_ask):
     once with feedback, then succeed if the retry is valid."""
     mock_ask.side_effect = [
         ("DROP TABLE customers", {}),              # first attempt: rejected
-        ("SELECT COUNT(*) FROM customers", {}),    # retry: valid
+        ("SELECT COUNT(*) FROM customers WHERE status='active'", {}),    # retry: valid
     ]
 
-    result = answer_quantitative_question("How many customers do we have?")
+    result = answer_quantitative_question("How many active customers do we have?")
 
     assert result["success"] is True
     assert mock_ask.call_count == 2  # exactly one retry
@@ -115,6 +116,65 @@ def test_answer_pipeline_fails_after_two_rejections(mock_ask):
     assert result["success"] is False
     assert "rejected twice" in result["error"]
     assert mock_ask.call_count == 2  # never a third attempt
+
+
+# --- Human-in-the-loop confirmation for unusual queries (Gold) ---------
+
+def test_is_unusual_query_flags_missing_where():
+    assert is_unusual_query("SELECT * FROM customers") is True
+
+
+def test_is_unusual_query_allows_query_with_where():
+    assert is_unusual_query("SELECT * FROM customers WHERE status='active'") is False
+
+
+def test_is_unusual_query_case_insensitive():
+    assert is_unusual_query("select * from customers where id=1") is False
+
+
+@patch("src.quantitative_agent._ask_gemini_for_sql")
+def test_unusual_query_declined_by_user_does_not_execute(mock_ask):
+    """If the user declines confirmation on an unusual (no-WHERE) query,
+    it must NOT be executed against the database."""
+    mock_ask.return_value = ("SELECT * FROM customers", {})
+
+    result = answer_quantitative_question(
+        "everyone", confirm_callback=lambda q: False
+    )
+
+    assert result["success"] is False
+    assert result.get("unusual_query_declined") is True
+    assert "results" not in result
+
+
+@patch("src.quantitative_agent._ask_gemini_for_sql")
+def test_unusual_query_accepted_by_user_executes_normally(mock_ask):
+    """If the user confirms, the unusual query proceeds and executes."""
+    mock_ask.return_value = ("SELECT COUNT(*) as cnt FROM customers", {})
+
+    result = answer_quantitative_question(
+        "everyone", confirm_callback=lambda q: True
+    )
+
+    assert result["success"] is True
+    assert result["results"][0]["cnt"] > 0
+
+
+@patch("src.quantitative_agent._ask_gemini_for_sql")
+def test_normal_query_never_triggers_confirmation(mock_ask):
+    """A query WITH a WHERE clause should never even call the
+    confirmation callback -- confirmation is only for unusual queries."""
+    mock_ask.return_value = ("SELECT COUNT(*) as cnt FROM customers WHERE status='active'", {})
+
+    call_count = {"n": 0}
+    def tracking_confirm(q):
+        call_count["n"] += 1
+        return True
+
+    result = answer_quantitative_question("active customers", confirm_callback=tracking_confirm)
+
+    assert result["success"] is True
+    assert call_count["n"] == 0
 
 
 if __name__ == "__main__":

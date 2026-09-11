@@ -143,11 +143,48 @@ def _execute_query(query: str, db_path: str = DB_PATH) -> list[dict]:
     return rows
 
 
-def answer_quantitative_question(question: str, db_path: str = DB_PATH) -> dict:
+def is_unusual_query(query: str) -> bool:
+    """
+    Flags a validated query as 'unusual' and worth a human's eyes before
+    executing -- specifically, a SELECT with no WHERE clause, which could
+    return or aggregate across every row in a table unintentionally.
+    This runs only on queries that already passed validate_sql(); it's a
+    judgment/safety nudge, not a security gate.
+    """
+    query_upper = query.upper()
+    return "WHERE" not in query_upper
+
+
+def _default_confirm(query: str) -> bool:
+    """
+    Default human-in-the-loop confirmation: prompt on the CLI. Tests and
+    non-interactive callers should pass their own confirm_callback instead
+    of relying on this (e.g. a mock that always returns True/False).
+    """
+    print(f"\n[Confirmation needed] This query has no WHERE clause and will "
+          f"run against the entire table:\n  {query}")
+    response = input("Proceed anyway? [y/N]: ").strip().lower()
+    return response == "y"
+
+
+def answer_quantitative_question(
+    question: str,
+    db_path: str = DB_PATH,
+    confirm_callback=None,
+) -> dict:
     """
     Full pipeline: NL question -> Gemini SQL -> validate -> (retry once if
-    rejected) -> execute -> return structured result.
+    rejected) -> [human confirmation if unusual] -> execute -> return
+    structured result.
+
+    confirm_callback: a function taking the SQL query string and returning
+    True (proceed) or False (abort). Defaults to an interactive CLI prompt.
+    Pass a custom callback (e.g. a test mock, or a non-interactive "auto
+    reject" function) to control this without needing real user input.
     """
+    if confirm_callback is None:
+        confirm_callback = _default_confirm
+
     schema = get_schema_description(db_path)
 
     sql_query, _ = _ask_gemini_for_sql(question, schema)
@@ -167,6 +204,16 @@ def answer_quantitative_question(question: str, db_path: str = DB_PATH) -> dict:
             }
 
         sql_query = sql_query_retry
+
+    if is_unusual_query(sql_query):
+        if not confirm_callback(sql_query):
+            return {
+                "success": False,
+                "question": question,
+                "sql": sql_query,
+                "error": "Query flagged as unusual (no WHERE clause) and was not confirmed by the user.",
+                "unusual_query_declined": True,
+            }
 
     try:
         rows = _execute_query(sql_query, db_path)
